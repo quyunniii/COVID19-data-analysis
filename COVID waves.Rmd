@@ -1,0 +1,461 @@
+---
+title: "STA450 A1"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r data imports}
+library(utils)
+#import data
+#data_ecdc <- read.csv(
+#  "https://opendata.ecdc.europa.eu/covid19/nationalcasedeath_eueea_daily_ei/csv",
+#  na.strings = "", fileEncoding = "UTF-8-BOM")
+data_owid <- read.csv(
+  "https://covid.ourworldindata.org/data/owid-covid-data.csv",
+  na.strings = "", fileEncoding = "UTF-8-BOM")
+data_uk <- read.csv(paste0("https://api.coronavirus.data.gov.uk/v2/",
+  "data?areaType=overview&metric=newCasesByPublishDate&format=csv"),
+  na.strings="", fileEncoding = "UTF-8-BOM")
+data_india <-read.csv("https://prsindia.org/covid-19/cases/download")
+data_london <-read.csv(paste0(
+  "https://data.london.gov.uk/download/coronavirus--covid-19--cases/",
+  "d15e692d-5e58-4b6e-80f2-78df6f8b148b/phe_cases_age_london.csv"))
+data_ny <- read.csv(
+  "https://raw.githubusercontent.com/nychealth/coronavirus-data/master/trends/cases-by-day.csv",
+  na.strings = "", fileEncoding = "UTF-8-BOM" )
+  
+#case data for Belgium
+#data_ecdc.bel <- data_ecdc[data_ecdc$countriesAndTerritories == "Belgium",]
+data_owid.bel <-data_owid[data_owid$location == "Belgium",]
+
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r , echo=FALSE}
+#plot Maha state
+data_india.maha <-data_india[data_india$Region == "Maharashtra",]
+data_india.maha$time= as.Date(as.character(data_india.maha$Date), format = '%d/%m/%Y')
+data_india.maha = data_india.maha[data_india.maha$time > as.Date('2020/1/1'), ]
+data_india.maha$cases = c(NA, diff(data_india.maha$Confirmed.Cases))
+goodData = which( (data_india.maha$cases < 150000) & (data_india.maha$cases > 0) )
+data_india.maha = data_india.maha[goodData, ]
+p1 <- data_india.maha %>% ggplot(aes(x=time, y=cases)) + geom_point(size = 1, shape = 1) + ggtitle(label = "COVID-19 Cases in Maharashtra state")
+#plot(data_india.maha$time, data_india.maha$cases)
+
+#ny
+data_ny$time = as.Date(as.character(data_ny$date_of_interest), format = '%m/%d/%Y')
+data_ny = data_ny[data_ny$time > as.Date('2020/1/1'), ]
+goodData = which( (data_ny$CASE_COUNT < 150000) & (data_ny$CASE_COUNT  >= 0) )
+data_ny = data_ny[goodData, ]
+p2 <- data_ny %>% ggplot(aes(x=time, y=CASE_COUNT )) + geom_point(size = 1, shape = 1) + xlab("time") + ylab("cases")  + ggtitle(label = "COVID-19 Cases in New York")
+
+#Belgium
+data_owid.bel$time = as.Date(as.character(data_owid.bel$date), format = '%Y-%m-%d')
+data_owid.bel = data_owid.bel[data_owid.bel$time > as.Date('2020/1/1'), ]
+goodData = which( (data_owid.bel$new_cases < 150000) & (data_owid.bel$new_cases > 0) )
+data_bel = data_owid.bel[goodData, ]
+p3 <- data_bel %>% ggplot(aes(x=time, y=new_cases)) + geom_point(size = 1, shape = 1) + xlab("time") + ylab("cases") + ggtitle(label = "COVID-19 Cases in Belgium")
+
+#london
+data_london$time= as.Date(as.character(data_london$date), format = '%Y-%m-%d')
+data_london = data_london[data_london$time > as.Date('2020-01-01'), ]
+#find sum for each date
+data_london = data_london %>% group_by(time) %>%
+  summarise(cases = sum(cases))
+goodData = which( (data_london$cases < 150000) & (data_london$cases >= 0) )
+data_london = data_london[goodData, ]
+p4 <-ggplot(data_london, aes(x=time, y=cases)) + geom_point(size = 1, shape = 1) + ggtitle(label = "COVID-19 Cases in London")
+
+
+```
+
+```{r}
+library(gridExtra)
+grid.arrange(p1, p2, p3, p4, nrow = 2)
+```
+
+
+
+
+
+```{r}
+#install.packages("deSolve")
+library(deSolve)
+```
+
+```{r}
+SIR = function(time, state, parameters) {
+  with(as.list(c(state, parameters)), {
+    dS= (-beta*S*I)
+    dI= (beta*S*I)-(gamma*I) 
+    dR= gamma*I
+    return(list(c(dS, dI, dR)))})
+}
+init = c(S = 0.9, I = 0.001)
+init = c(init, c(R = 1-sum(init)))
+parameters = c(beta = 0.8, gamma = 0.1)
+someParams = c(S = 0.5, I=0.001, beta = 0.25, gamma = 0.05)
+mySir = function(parameters, Stime) {
+  init = parameters[c('S','I')]
+  init = c(init, c(R = 1-sum(init)))
+  out = as.data.frame(deSolve::ode(y = init, times = as.integer(Stime), 
+    func = SIR, parms = parameters[c('beta','gamma')]))
+  out$P = out$I + out$R
+  cbind(time = Stime, out[,-1], Y = c(diff(out$P), NA))
+}
+
+forOpt = function(par, Stime, data) sum((
+        mySir(par, Stime)[,'Y'] - 
+          data[match(Stime, data$time), 'casesProp']
+    )^2, na.rm=TRUE)
+```
+
+```{r}
+pop_maha = 11420000
+data_india.maha$casesProp = data_india.maha$cases / pop_maha
+
+pop_ny = 884000
+data_ny$casesProp = data_ny$CASE_COUNT / pop_ny
+
+pop_london = 896198
+data_london$casesProp = data_london$cases / pop_london
+
+pop_bel = 1152123
+data_bel$casesProp = data_bel$new_cases / pop_bel
+```
+
+
+
+```{r Delta in Maha}
+timeDelta_Maha = seq(as.Date('2021/3/1'), as.Date('2021/7/1'), by = 1)
+resDelta_Maha = optim(someParams, 
+                   forOpt,
+                   lower = c(0, 0, 0, 0),
+                   upper = c(0.9, 0.1, 10, 1),
+                   control = list(parscale = c(1, 0.001, 1, 0.1)),
+                   Stime = timeDelta_Maha,
+                   data = data_india.maha)
+outDelta_Maha = mySIR(resDelta_Maha$par, timeDelta_Maha)
+resDelta_Maha[c('par', 'value', 'counts')]
+
+timeOmi_Maha = seq(as.Date('2022/1/1'), as.Date('2022/2/17'), by = 1)
+resOmi_Maha = optim(someParams, 
+                   forOpt,
+                   lower = c(0, 0, 0, 0),
+                   upper = c(0.9, 0.1, 10, 1),
+                   control = list(parscale = c(1, 0.001, 1, 0.1)),
+                   Stime = timeOmi_Maha,
+                   data = data_india.maha)
+outOmi_Maha = mySIR(resOmi_Maha$par, timeOmi_Maha)
+resOmi_Maha[c('par', 'value', 'counts')]
+
+timeDelta_ny = seq(as.Date('2020/8/1'), as.Date('2021/7/1'), by = 1)
+resDelta_ny = optim(someParams, 
+                   forOpt,
+                   lower = c(0, 0, 0, 0),
+                   upper = c(0.9, 0.1, 10, 1),
+                   control = list(parscale = c(1, 0.001, 1, 0.1)),
+                   Stime = timeDelta_ny,
+                   data = data_ny)
+outDelta_ny = mySIR(resDelta_ny$par, timeDelta_ny)
+resDelta_ny[c('par', 'value', 'counts')]
+
+timeOmi_ny = seq(as.Date('2021/11/15'), as.Date('2022/2/14'), by = 1)
+resOmi_ny = optim(someParams, 
+                   forOpt,
+                   lower = c(0, 0, 0, 0),
+                   upper = c(0.9, 0.1, 10, 1),
+                   control = list(parscale = c(1, 0.001, 1, 0.1)),
+                   Stime = timeOmi_ny,
+                   data = data_ny)
+outOmi_ny = mySIR(resOmi_ny$par, timeOmi_ny)
+resOmi_ny[c('par', 'value', 'counts')]
+
+timeDelta_bel = seq(as.Date('2021/10/1'), as.Date('2022/1/1'), by = 1)
+params = c(S = 0.5, I=0.001, beta = 0.25, gamma = 0.005)
+resDelta_bel = optim(params, 
+                   forOpt,
+                   lower = c(0, 0, 0, 0),
+                   upper = c(0.9, 0.1, 10, 1),
+                   control = list(parscale = c(1, 0.001, 1, 0.1)),
+                   Stime = timeDelta_bel,
+                   data = data_bel)
+outDelta_bel = mySIR(resDelta_bel$par, timeDelta_bel)
+resDelta_bel[c('par', 'value', 'counts')]
+
+timeOmi_bel = seq(as.Date('2021/12/20'), as.Date('2022/3/1'), by = 1)
+params = c(S = 0.5, I=0.001, beta = 0.25, gamma = 0.05)
+resOmi_bel = optim(params, 
+                   forOpt,
+                   lower = c(0, 0, 0, 0),
+                   upper = c(0.9, 0.1, 10, 1),
+                   control = list(parscale = c(1, 0.001, 1, 0.1)),
+                   Stime = timeOmi_bel,
+                   data = data_bel)
+outOmi_bel = mySIR(resOmi_bel$par, timeOmi_bel)
+resOmi_bel[c('par', 'value', 'counts')]
+
+timeDelta_london = seq(as.Date('2021/6/1'), as.Date('2021/10/1'), by = 1)
+params = c(S = 0.5, I=0.001, beta = 0.25, gamma = 0.05)
+resDelta_london = optim(params, 
+                   forOpt,
+                   lower = c(0, 0, 0, 0),
+                   upper = c(0.9, 0.1, 10, 1),
+                   control = list(parscale = c(1, 0.001, 1, 0.1)),
+                   Stime = timeDelta_london,
+                   data = data_london)
+outDelta_london = mySIR(resDelta_london$par, timeDelta_london)
+resDelta_london[c('par', 'value', 'counts')]
+
+timeOmi_london = seq(as.Date('2021/10/1'), as.Date('2022/3/1'), by = 1)
+params = c(S = 0.5, I=0.001, beta = 0.25, gamma = 0.005)
+resOmi_london = optim(params, 
+                   forOpt,
+                   lower = c(0, 0, 0, 0),
+                   upper = c(0.9, 0.1, 10, 1),
+                   control = list(parscale = c(1, 0.001, 1, 0.1)),
+                   Stime = timeOmi_london,
+                   data = data_london)
+outOmi_london = mySIR(resOmi_london$par, timeOmi_london)
+resOmi_london[c('par', 'value', 'counts')]
+```
+```{r}
+par(mfrow=c(2,2))
+plot(outDelta_Maha[,c('time','Y')], lwd=2,
+type='l', xaxs='i',main="Maharashtra Delta Wave SIR Model",
+ylab='cases proportion', xlab='time in month')
+points(data_india.maha$time, data_india.maha$casesProp)
+
+plot(outOmi_Maha[,c('time','Y')], lwd=2,
+type='l',xaxs='i',main="Maharashtra Omicron Wave SIR Model",
+ylab='cases proportion', xlab='time in month')
+points(data_india.maha$time, data_india.maha$casesProp)
+
+plot(outDelta_ny[,c('time','Y')], lwd=2,
+type='l', xaxs='i',main="New York Delta Wave SIR Model",
+ylab='cases proportion', xlab='time in month')
+points(data_ny$time, data_ny$casesProp)
+
+plot(outOmi_ny[,c('time','Y')], lwd=2,
+type='l', xaxs='i',main="New York Omicron Wave SIR Model",
+ylab='cases proportion', xlab='time in month')
+points(data_ny$time, data_ny$casesProp)
+
+
+```
+
+```{r}
+par(mfrow=c(2,2))
+plot(outDelta_bel[,c('time','Y')], lwd=2,
+type='l', xaxs='i', main="Belgium Delta Wave SIR Model",
+ylab='cases proportion', xlab='time in month')
+points(data_bel$time, data_bel$casesProp)
+
+plot(outOmi_bel[,c('time','Y')], lwd=2,
+type='l', xaxs='i', main="Belgium Omicron Wave SIR Model",
+ylab='cases proportion', xlab='time in month')
+points(data_bel$time, data_bel$casesProp)
+
+plot(outDelta_london[,c('time','Y')], lwd=2,
+type='l', xaxs='i', main="London Delta Wave SIR Model",
+ylab='cases proportion', xlab='time in month')
+points(data_london$time, data_london$casesProp)
+
+plot(outOmi_london[,c('time','Y')], lwd=2,
+type='l',  xaxs='i',main="London Omicron Wave SIR Model",
+ylab='cases proportion', xlab='time in month')
+points(data_london$time, data_london$casesProp)
+```
+
+
+
+
+
+
+
+
+###Q2
+```{r}
+library("EpiILMCT")
+#Generate epidemic
+net <- contactnet(type = 'random', num.id = 500, beta = 1)
+epi <- datagen(type = 'SINR', kerneltype = 'network',
+kernelmatrix = net, suspar = 0.3248,
+delta = matrix(c(1, 0, 0.25, 0.25),2,2))
+#incubation PERIODS (not rate) ~ gamma(1, 0.25)
+#delay PERIODS (not rate) ~ gamma(0.125, 0.25)
+#transmission rate (beta) is 0.3248 for Maharashtra state
+plot(epi, plottype = "history")
+susccov = list(NULL)
+#prior transmission rate(beta)
+susccov[[1]] = list(0.1424, c("gamma", 1, 1, 0.1424) )
+susccov[[2]] = rep(1,100)
+spark <- list(0.00001, c("gamma", 1, 100000, 0.00001 ))
+#prior -- sparks forced to be low (as we don’t really want it)
+delta1 <- list(NULL)
+delta1[[1]] <- c(1,1)
+#fixes shape parameter of gamma which incubation
+# and delay periods are assumed to follow
+# (i.e. we are assuming exponential)
+delta1[[2]] <- matrix(c(0.25, 0.25), ncol = 1, nrow = 2)
+#inital values of incubation and delay distribution rate parameters
+delta1[[3]] <- matrix(c(1,1,4,0.00000000001), ncol = 2, nrow = 2)
+# prior -- gamma(1,4) on incubation period rate
+# prior -- gamma(1,0.5) on delay period rate
+```
+```{r}
+mcmc_no_delay <- epictmcmc(object = epi, datatype = "unknown removal",
+nsim = 500, nchains = 1, control.sus = susccov,
+delta = delta1, spark.par = spark)
+plot(mcmc_no_delay, plottype = "parameter", start = 1, thin = 10,
+density = FALSE)
+```
+```{r}
+summary(window(mcmc_no_delay$parameter.samples, start = 100, thin = 10))
+```
+```{r}
+library("EpiILMCT")
+#Generate epidemic
+net <- contactnet(type = 'random', num.id = 500, beta = 1)
+epi <- datagen(type = 'SINR', kerneltype = 'network',
+kernelmatrix = net, suspar = 0.3248,
+delta = matrix(c(1, 0.125, 0.25, 0.25),2,2))
+#incubation PERIODS (not rate) ~ gamma(1, 0.25)
+#delay PERIODS (not rate) ~ gamma(0.125, 0.25)
+#transmission rate (beta) is 0.3248 for Maharashtra state
+plot(epi, plottype = "history")
+```
+
+
+```{r}
+susccov = list(NULL)
+#prior transmission rate(beta)
+susccov[[1]] = list(0.1424, c("gamma", 1, 1, 0.1424) )
+susccov[[2]] = rep(1,100)
+spark <- list(0.00001, c("gamma", 1, 100000, 0.00001 ))
+#prior -- sparks forced to be low (as we don’t really want it)
+delta1 <- list(NULL)
+delta1[[1]] <- c(1,1)
+#fixes shape parameter of gamma which incubation
+# and delay periods are assumed to follow
+# (i.e. we are assuming exponential)
+delta1[[2]] <- matrix(c(0.25, 0.25), ncol = 1, nrow = 2)
+#inital values of incubation and delay distribution rate parameters
+delta1[[3]] <- matrix(c(1,1,4,0.5), ncol = 2, nrow = 2)
+# prior -- gamma(1,4) on incubation period rate
+# prior -- gamma(1,0.5) on delay period rate
+```
+
+```{r}
+mcmc_0.5_delay <- epictmcmc(object = epi, datatype = "unknown removal",
+nsim = 500, nchains = 1, control.sus = susccov,
+delta = delta1, spark.par = spark)
+plot(mcmc_0.5_delay, plottype = "parameter", start = 1, thin = 10,
+density = FALSE)
+```
+
+```{r}
+summary(window(mcmc_0.5_delay$parameter.samples, start = 100, thin = 10))
+```
+##2-day delay
+```{r}
+#Generate epidemic
+net <- contactnet(type = 'random', num.id = 500, beta = 1)
+epi <- datagen(type = 'SINR', kerneltype = 'network',
+kernelmatrix = net, suspar = 0.3248,
+delta = matrix(c(1, 0.5, 0.25, 0.25),2,2))
+#incubation PERIODS (not rate) ~ gamma(1, 0.25)
+#delay PERIODS (not rate) ~ gamma(0.5, 0.25)
+#transmission rate (beta) is 0.3248 for Maharashtra state
+plot(epi, plottype = "history")
+```
+```{r}
+susccov = list(NULL)
+#transmission rate(beta)
+susccov[[1]] = list(0.1424, c("gamma", 1, 1, 0.1424) )
+susccov[[2]] = rep(1,100)
+spark <- list(0.00001, c("gamma", 1, 100000, 0.00001 ))
+#prior -- sparks forced to be low (as we don’t really want it)
+delta1 <- list(NULL)
+delta1[[1]] <- c(1,1)
+#fixes shape parameter of gamma which incubation
+# and delay periods are assumed to follow
+# (i.e. we are assuming exponential)
+delta1[[2]] <- matrix(c(0.25, 0.25), ncol = 1, nrow = 2)
+#inital values of incubation and delay distribution rate parameters
+delta1[[3]] <- matrix(c(1,1,4,2), ncol = 2, nrow = 2)
+# prior -- gamma(1,4) on incubation period rate
+# prior -- gamma(1,2) on delay period rate
+```
+
+```{r}
+mcmc_2_delay <- epictmcmc(object = epi, datatype = "unknown removal",
+nsim = 500, nchains = 1, control.sus = susccov,
+delta = delta1, spark.par = spark)
+plot(mcmc_2_delay, plottype = "parameter", start = 1, thin = 10,
+density = FALSE)
+```
+
+```{r}
+summary(window(mcmc_2_delay$parameter.samples, start = 100, thin = 10))
+```
+
+```{r}
+#Generate epidemic
+library("EpiILMCT")
+net <- contactnet(type = 'random', num.id = 500, beta = 1)
+epi <- datagen(type = 'SINR', kerneltype = 'network',
+kernelmatrix = net, suspar = 0.3248,
+delta = matrix(c(1, 1.25, 0.25, 0.25),2,2))
+#incubation PERIODS (not rate) ~ gamma(1, 0.25)
+#delay PERIODS (not rate) ~ gamma(0.5, 0.25)
+#transmission rate (beta) is 0.3248 for Maharashtra state
+plot(epi, plottype = "history")
+```
+
+```{r}
+susccov = list(NULL)
+#transmission rate(beta)
+susccov[[1]] = list(0.1424, c("gamma", 1, 1, 0.1424) )
+susccov[[2]] = rep(1,100)
+spark <- list(0.00001, c("gamma", 1, 100000, 0.00001 ))
+#prior -- sparks forced to be low (as we don’t really want it)
+delta1 <- list(NULL)
+delta1[[1]] <- c(1,1)
+#fixes shape parameter of gamma which incubation
+# and delay periods are assumed to follow
+# (i.e. we are assuming exponential)
+delta1[[2]] <- matrix(c(0.25, 0.25), ncol = 1, nrow = 2)
+#inital values of incubation and delay distribution rate parameters
+delta1[[3]] <- matrix(c(1,1,4,5), ncol = 2, nrow = 2)
+# prior -- gamma(1,4) on incubation period rate
+# prior -- gamma(1,5) on delay period rate
+```
+
+```{r}
+mcmc_5_delay <- epictmcmc(object = epi, datatype = "unknown removal",
+nsim = 500, nchains = 1, control.sus = susccov,
+delta = delta1, spark.par = spark)
+plot(mcmc_5_delay, plottype = "parameter", start = 1, thin = 10,
+density = FALSE)
+```
+```{r}
+summary(window(mcmc_5_delay$parameter.samples, start = 100, thin = 10))
+```
